@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf8">
+  <title>Surface Nets</title>
+  <style type="text/css">
+    body {
+      background-color: lightgray;
+    }
+    #canvas {
+      border: 1px solid black;
+    }
+  </style>
+</head>
+<body>
+  <h1>Surface Nets</h1>
+  <div id="container">
+    <canvas id="canvas" width="640" height="480" oncontextmenu="return false;"></canvas>
+    <div class="menu">
+      <button onclick="niceClear()">Nice Clear</button>
+      <button onclick="niceRelax()">Nice relax</button>
+      |
+      <button onclick="setFill()">Fill</button>
+      |
+      Constraint <input type="checkbox" id="constraint"> 
+      Relax Level<input type="text" id="relaxLevel">
+      |
+      Paint Bits <input type="checkbox" id="paintbts"> 
+      Paint Edges <input type="checkbox" id="paintdgs"> 
+      Chuncked <input type="checkbox" id="chuncked"> 
+      Use Levels <input type="checkbox" id="uselevels"> 
+      <br/>
+      <button onclick="clearBits()">Clear All</button>
+      <button onclick="paintBits(); paintNodes(); paintEdges()">Paint All</button>
+      <button onclick="relaxEdges()">Relax Edges</button>
+      |
+      <button onclick="clearCanvas()">Clean</button>
+      <button onclick="makeNodes()">Make Nodes</button>
+      <button onclick="paintNodes()">Paint Nodes</button>
+      <button onclick="paintEdges()">Paint Edges</button>
+      <br/>
+      <button onclick="relaxFromTo(0, WIDTH/2)">Relax left</button>
+      <button onclick="relaxFromTo(WIDTH/2+1, WIDTH)">Relax right</button>
+    </div>
+  </div>
+  <script type="text/javascript">
+    const _width = 640;
+    const _height = 480;
+    const BOXSIZE = 10;
+    const BOXWIDTH = BOXSIZE || 16;
+    const BOXHEIGHT = BOXSIZE || 8;
+    const WIDTH = _width/BOXWIDTH;
+    const HEIGHT = _height/BOXHEIGHT;
+
+    var bitcolor =  "#FFDDDD";
+    var nodecolor = "#00AA00";
+    var edgecolor = "#00DDFF";
+
+    var canvasElem = document.getElementById("canvas");
+    var ctx = canvasElem.getContext("2d");
+
+    var bitfield = new Array(WIDTH * HEIGHT);
+    var nodefield = new Array(WIDTH * HEIGHT);
+    var nodes = new Array();
+
+    function clamp (t, a, b) {
+      return (t<a)? a:((t>b)? b:t);
+    }
+
+    function getIndex(x, y) {
+      return clamp(y,0,HEIGHT)*WIDTH + clamp(x,0,WIDTH);
+    }
+
+    function getBit (x, y) {
+      return bitfield[getIndex(x,y)];
+    }
+    function setBit (x, y, value) {
+      bitfield[getIndex(x,y)] = value;
+    }
+
+    function clearCanvas () {
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+    }
+
+    function paintBits () {
+      ctx.fillStyle = bitcolor;
+      for (var x = 0; x < WIDTH; x++) {
+        for (var y = 0; y < HEIGHT; y++) {
+          if (getBit(x,y)) {
+            ctx.fillRect(
+              x*BOXWIDTH, y*BOXHEIGHT,
+              BOXWIDTH, BOXHEIGHT
+            );
+          }
+        }
+      }
+    }
+
+    function clearBits () {
+      for (var i = 0; i < WIDTH*HEIGHT; i++) {
+        bitfield[i] = false;
+      }
+    }
+
+    function getClick(x,y) {
+      var rect = canvasElem.getBoundingClientRect();
+      return {
+        x: parseInt((Number(x) - rect.left)/BOXWIDTH),
+        y: parseInt((Number(y) - rect.top)/BOXHEIGHT)
+      };
+    }
+
+    var erasing = false;
+    function trySetBitAt(x, y) {
+      var click = getClick(x,y);
+      setBit(click.x, click.y, !erasing);
+    }
+
+    var doFill = false;
+    function setFill () {doFill = true;}
+
+    function fillBits (inpoint) {
+      var points = [inpoint];
+      function pushPoint(x,y) {
+        points.push({x: x, y: y});
+      }
+      while (points.length > 0) {
+        var point = points.pop();
+        if (!getBit(point.x, point.y)) {
+          setBit(point.x, point.y, true);
+          pushPoint(point.x, point.y+1);
+          pushPoint(point.x, point.y-1);
+          pushPoint(point.x+1, point.y);
+          pushPoint(point.x-1, point.y);
+          /*pushPoint(point.x-1, point.y-1);
+          pushPoint(point.x-1, point.y  );
+          pushPoint(point.x-1, point.y+1);
+          pushPoint(point.x  , point.y+1);
+          pushPoint(point.x+1, point.y+1);
+          pushPoint(point.x+1, point.y  );
+          pushPoint(point.x+1, point.y-1);
+          pushPoint(point.x  , point.y-1);*/
+        }
+      }
+    }
+
+    var dragging = false;
+    canvasElem.addEventListener("mousedown", function (ev) {
+      // click izquierdo
+      ev.preventDefault();
+      ev.stopPropagation();
+      erasing = ev.buttons == 2;
+      if (doFill) {
+        fillBits(getClick(ev.clientX, ev.clientY));
+        doFill = false;
+      } else {
+        trySetBitAt(ev.clientX, ev.clientY);
+        dragging = true;
+      }
+      doAllRelaxed();
+      //paintBits();
+    });
+    document.addEventListener("mouseup", function () {
+      erasing = false;
+      dragging = false;
+    });
+    canvasElem.addEventListener("mousemove", function (ev) {
+      if (dragging) {
+        trySetBitAt(ev.clientX, ev.clientY);
+        doAllRelaxed();
+        //paintBits();
+      }
+    });
+
+    var inputs = document.getElementsByTagName("input");
+    for (var i = 0; i < inputs.length; i++) {
+      inputs[i].addEventListener("change", function (ev) {
+        doAllRelaxed();
+      });
+    }
+
+    var bitCoords = [
+      [-1,-1],
+      [-1,0],
+      [-1,1],
+      [0,1],
+      [1,1],
+      [1,0],
+      [1,-1],
+      [-1,0],
+    ]
+
+    function Node (x, y) {
+      this.x = x;
+      this.y = y;
+      this.xorig = x;
+      this.yorig = y;
+      this.edges = new Array();
+    }
+
+    Node.prototype.connectTo = function (other, passOther) {
+      var dopush = true;
+      for (var i = 0; i < this.edges; i++) {
+        if (this.edges[i] == other) {
+          dopush = false;
+        }
+      }
+      if (dopush) {this.edges.push(other);}
+      if (!passOther) { other.connectTo(this, true); }
+    }
+
+    function makeNodes () {
+      nodes = new Array();
+      nodefield = new Array(WIDTH * HEIGHT);
+      // Create Nodes
+      for (var x = 0; x < WIDTH; x++) {
+        for (var y = 0; y < HEIGHT; y++) {
+          var around = 0;
+          if (getBit(x,y)) { around++; }
+          if (getBit(x,y-1)) { around++; }
+          if (getBit(x-1,y)) { around++; }
+          if (getBit(x-1,y-1)) { around++; }
+          if(around > 0 && around < 4) {
+            var node = new Node(x, y);
+            nodes.push(node);
+            nodefield[getIndex(x,y)] = node;
+          }
+          
+
+          /*
+          if (!getBit(x,y)) {
+            var around = false;
+            if (getBit(x+1,y)) {
+              around = true;
+            }
+            /*for (var i = 0; i < bitCoords; i++) {
+              if (getBit(x + bitCoords[i][0], y + bitCoords[i][1])) {
+                around = true;
+              }
+            }* /
+            for (var ix = -1; ix <= 1; ix++) {
+              for (var iy = -1; iy <= 1; iy++) {
+                if (getBit(x+ix, y+iy)) {
+                  around = true;
+                }
+              }
+            }
+            if (around) {
+              var node = new Node(x, y);
+              nodes.push(node);
+              nodefield[getIndex(x,y)] = node;
+            }
+          }*/
+        }
+      }
+      // Connect Nodes
+      function getNode (x,y) { return nodefield[getIndex(x,y)]; }
+      function maybeConnect (a, b) {
+        if (a && b) {
+          a.connectTo(b);
+        }
+      }
+      for (var x = 0; x < WIDTH; x++) {
+        for (var y = 0; y < HEIGHT; y++) {
+          var node = getNode(x,y);
+          if (node) {
+            // ^ es xor binario, no lógico, aquí funciona porque getBit
+            // devuelve boolean y undefined, y funciona bien con ellos.
+            if (getBit(x, y) ^ getBit(x, y-1)) {
+              maybeConnect(node, getNode(x+1,y));
+            }
+            //maybeConnect(node, getNode(x-1,y));
+            if (getBit(x, y) ^ getBit(x-1, y)) {
+              maybeConnect(node, getNode(x,y+1));
+            }
+            //maybeConnect(node, getNode(x,y-1));
+          }
+        }
+      }
+    }
+
+    function paintNodes () {
+      ctx.fillStyle = nodecolor;
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        ctx.fillRect(
+          node.x*BOXWIDTH - BOXWIDTH/6,
+          node.y*BOXHEIGHT - BOXHEIGHT/6,
+          BOXWIDTH/3,
+          BOXHEIGHT/3
+        );
+      }
+    }
+
+    function paintEdges () {
+      ctx.beginPath();
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        for (var j = 0; j < node.edges.length; j++) {
+          var edge = node.edges[j];
+          ctx.moveTo(
+            node.x*BOXWIDTH,
+            node.y*BOXHEIGHT
+          );
+          ctx.lineTo(
+            edge.x*BOXWIDTH,
+            edge.y*BOXHEIGHT
+          );
+        }
+      }
+      ctx.fillStyle = edgecolor;
+      ctx.stroke();
+      ctx.closePath();
+    }
+
+    function relaxFromTo (from, to) {
+      var constraint = document.getElementById("constraint").checked;
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.xorig < from || node.xorig > to) {
+          continue;
+        }
+        var x = node.x;
+        var y = node.y;
+        for (var j = 0; j < node.edges.length; j++) {
+          var edge = node.edges[j];
+          if (edge.xorig < from || edge.xorig > to) {
+            x += node.x;
+            y += node.y;
+          } else {
+            x += edge.x;
+            y += edge.y;
+          }
+        }
+        var total = node.edges.length + 1;
+        node.x = x / total;
+        node.y = y / total;
+        if (constraint) {
+          node.x = clamp(node.x, node.xorig-0.5, node.xorig+0.5);
+          node.y = clamp(node.y, node.yorig-0.5, node.yorig+0.5);
+        }
+      }
+    }
+
+    function relaxLevels (level) {
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        var edges = new Set();
+        var prevs = new Set();
+        prevs.add(node);
+        var x = node.x;
+        var y = node.y;
+        for (var j = 0; j < level; j++) {
+          edges = new Set();
+          // Agregar cada vecino de cada edge.
+          prevs.forEach(function (a) {
+            a.edges.forEach(function (b) {
+              edges.add(b);
+            });
+          });
+          // Eliminar los nodos que ya hayamos analizado
+          prevs.forEach(function (a) {
+            edges.delete(a);
+          });
+          // Calcular
+          edges.forEach(function (a) {
+            x += a.x/(i+1);
+            y += a.y/(i+1);
+          });
+          var total = edges.size/(i+1) + 1;
+          x = x / total;
+          y = y / total;
+          // Agregar los edges a la lista de nodos analizados
+          edges.forEach(function (a) {
+            prevs.add(a);
+          });
+        };
+        node.x = x;
+        node.y = y;
+      };
+    }
+
+    function relaxEdges () {
+      relaxFromTo(0, WIDTH);
+    }
+
+    var niceCleared = false;
+    function niceClear () {
+      clearBits();
+      clearCanvas();
+      niceCleared = true;
+    }
+    function niceRelax () {
+      console.log("Nice Relax")
+      if (niceCleared) {
+        makeNodes();
+        niceCleared = false;
+      } else {
+        relaxEdges();
+      }
+      clearCanvas();
+      paintBits();
+      paintEdges();
+    }
+
+    function doAllRelaxed () {
+      makeNodes();
+      var level = parseInt(document.getElementById("relaxLevel").value);
+      if (document.getElementById("uselevels").checked) {
+        relaxLevels(level);
+      } else {
+        for (var i = 0; i < level; i++) {
+          if (document.getElementById("chuncked").checked) {
+            relaxFromTo(0, WIDTH/2);
+            relaxFromTo(WIDTH/2+1, WIDTH);
+          } else {
+            relaxEdges();
+          }
+        }
+      }
+      clearCanvas();
+      if (document.getElementById("paintbts").checked) {
+        paintBits();
+      }
+      if (document.getElementById("paintdgs").checked) {
+        paintEdges();
+      }
+    }
+  </script>
+</body>
+</html>
